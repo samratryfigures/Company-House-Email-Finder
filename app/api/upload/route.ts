@@ -5,6 +5,9 @@ import { leadIdentityKey } from "@/lib/lead-utils";
 import { prisma } from "@/lib/prisma";
 import { getSerperApiKey } from "@/lib/settings";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const MAX_BATCH = 1_000;
 
 function optionalText(value: unknown): string | null {
