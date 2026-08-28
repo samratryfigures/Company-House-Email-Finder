@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum LeadStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model CompanyLead {
+  id           String     @id @default(uuid())
+  batchId      String
+  nameKey      String     @unique
+  originalName String
+  companyNumber String?
+  postcode      String?
+  completeAddress String?
+  companyCategory String?
+  companyStatus String?
+  incorporationDate String?
+  accountsNextDueDate String?
+  accountsLastMadeUpDate String?
+  cleanedName  String?
+  website      String?
+  email        String?
+  verified     Boolean    @default(false)
+  status       LeadStatus @default(PENDING)
+  errorLog     String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([batchId])
+  @@index([status])
+  @@index([batchId, status])
+  @@index([createdAt])
+}
+
+model AppSetting {
+  id           String   @id
+  serperApiKey String   @default("")
+  updatedAt    DateTime @updatedAt
+}
