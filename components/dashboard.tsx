@@ -281,7 +281,7 @@ export function Dashboard() {
     }
 
     let totalQueued = 0;
-    let parseBuffer: CompanyRecord[] = [];
+    const parseBuffer: CompanyRecord[] = [];
     let truncated = false;
     let cancelled = false;
 
