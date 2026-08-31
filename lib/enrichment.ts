@@ -1,12 +1,8 @@
 import { load } from "cheerio";
 import { SERPER_CREDITS_ERROR, SERPER_KEY_MISSING } from "@/lib/lead-utils";
 import {
-  domainMatchesCompanyName,
   emailBelongsToWebsite,
   isBlockedHost,
-  looksLikeDirectoryPage,
-  nameAppearsInText,
-  preferredCompanyTld,
   serperQueryForUkCompany,
   type UkCompanyContext,
 } from "@/lib/uk-verify";
@@ -66,6 +62,20 @@ type SearchHit = {
   website: string;
 };
 
+function nameTokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4);
+}
+
+function titleLooksRelevant(hit: SearchHit, ctx: UkCompanyContext): boolean {
+  const haystack = `${hit.title} ${hit.snippet}`.toLowerCase();
+  const tokens = nameTokens(ctx.cleanedName).length ? nameTokens(ctx.cleanedName) : nameTokens(ctx.originalName);
+  if (tokens.length === 0) return true;
+  return tokens.some((token) => haystack.includes(token));
+}
+
 export async function findCompanyWebsiteCandidates(
   ctx: UkCompanyContext,
   apiKey: string,
@@ -124,20 +134,8 @@ export async function findCompanyWebsiteCandidates(
     });
   }
 
-  hits.sort((a, b) => scoreHit(b, ctx) - scoreHit(a, ctx));
+  hits.sort((a, b) => Number(titleLooksRelevant(b, ctx)) - Number(titleLooksRelevant(a, ctx)));
   return hits;
-}
-
-function scoreHit(hit: SearchHit, ctx: UkCompanyContext): number {
-  const hostname = hostnameFromUrl(hit.website) ?? "";
-  let score = 0;
-  if (domainMatchesCompanyName(hostname, ctx.originalName) || domainMatchesCompanyName(hostname, ctx.cleanedName)) {
-    score += 50;
-  }
-  if (preferredCompanyTld(hostname)) score += 8;
-  if (nameAppearsInText(ctx.originalName, hit.title)) score += 10;
-  if (looksLikeDirectoryPage(`${hit.title} ${hit.snippet}`)) score -= 40;
-  return score;
 }
 
 export async function findCompanyDomain(cleanedName: string, apiKey: string): Promise<string | null> {
@@ -166,7 +164,7 @@ function collectEmails(html: string): string[] {
 async function fetchHtml(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(4_000),
+      signal: AbortSignal.timeout(5_000),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; LeadEnrichmentBot/1.0; +https://localhost) AppleWebKit/537.36",
@@ -189,7 +187,7 @@ async function fetchHtml(url: string): Promise<string | null> {
 
 export async function scrapeForEmail(domain: string): Promise<string | null> {
   const origin = domain.startsWith("http") ? domain.replace(/\/$/, "") : `https://${domain}`;
-  const paths = ["/", "/contact", "/contact-us"];
+  const paths = ["/", "/contact", "/contact-us", "/about", "/about-us"];
   const found: string[] = [];
 
   for (const path of paths) {
@@ -206,29 +204,13 @@ export async function scrapeForEmail(domain: string): Promise<string | null> {
     $("script, style, noscript").remove();
     found.push(...collectEmails($.root().text()));
     found.push(...collectEmails(html));
+
+    const unique = [...new Set(found)];
+    const match = unique.find((email) => emailBelongsToWebsite(email, origin));
+    if (match) return match;
   }
 
-  const unique = [...new Set(found)];
-  return unique.find((email) => emailBelongsToWebsite(email, origin)) ?? null;
-}
-
-async function verifyCandidate(hit: SearchHit, ctx: UkCompanyContext): Promise<boolean> {
-  const hostname = hostnameFromUrl(hit.website);
-  if (!hostname || isBlockedHost(hostname)) return false;
-  if (looksLikeDirectoryPage(`${hit.title} ${hit.snippet}`)) return false;
-
-  const nameInDomain =
-    domainMatchesCompanyName(hostname, ctx.originalName) || domainMatchesCompanyName(hostname, ctx.cleanedName);
-  if (nameInDomain && preferredCompanyTld(hostname)) {
-    return true;
-  }
-
-  const html = (await fetchHtml(hit.website)) ?? "";
-  if (!html) return nameInDomain && preferredCompanyTld(hostname);
-  if (!preferredCompanyTld(hostname)) return false;
-
-  const titleAndHome = `${hit.title}\n${html.slice(0, 20_000)}`;
-  return nameAppearsInText(ctx.originalName, titleAndHome) || nameAppearsInText(ctx.cleanedName, titleAndHome);
+  return null;
 }
 
 export async function enrichCompany(
@@ -253,61 +235,37 @@ export async function enrichCompany(
 
   try {
     const candidates = await findCompanyWebsiteCandidates(ctx, apiKey);
-    if (candidates.length === 0) {
+    const website = candidates[0]?.website ?? null;
+
+    if (!website) {
       return {
         cleanedName,
         website: null,
         email: null,
-        errorLog: "No official UK website found in search results",
-        status: "FAILED",
-        verified: false,
-      };
-    }
-
-    let verifiedSite: string | null = null;
-    for (const hit of candidates.slice(0, 4)) {
-      if (scoreHit(hit, ctx) < 0) continue;
-      try {
-        if (await verifyCandidate(hit, ctx)) {
-          verifiedSite = hit.website;
-          break;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    if (!verifiedSite) {
-      return {
-        cleanedName,
-        website: null,
-        email: null,
-        errorLog: "No company-owned website matched this name (directories like Tracxn/Endole are ignored)",
+        errorLog: "No website found in search results",
         status: "FAILED",
         verified: false,
       };
     }
 
     try {
-      const email = await scrapeForEmail(verifiedSite);
+      const email = await scrapeForEmail(website);
       return {
         cleanedName,
-        website: verifiedSite,
+        website,
         email,
-        errorLog: email
-          ? null
-          : "Website verified for this UK company, but no matching company-domain email was found",
+        errorLog: email ? null : "Website found, but no email on that domain",
         status: "COMPLETED",
-        verified: true,
+        verified: Boolean(email),
       };
     } catch (error) {
       return {
         cleanedName,
-        website: verifiedSite,
+        website,
         email: null,
         errorLog: `Scrape failed: ${error instanceof Error ? error.message : "unknown error"}`,
-        status: "FAILED",
-        verified: true,
+        status: "COMPLETED",
+        verified: false,
       };
     }
   } catch (error) {

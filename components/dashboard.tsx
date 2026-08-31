@@ -391,7 +391,7 @@ export function Dashboard() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Lead Enrichment</h1>
           <p className="mt-2 text-muted-foreground">
-            Upload a Companies House Excel/CSV. We find each company&apos;s own website (not directories like Tracxn) and emails on that domain. Duplicate companies are skipped. Street addresses are not saved.
+            Upload a Companies House Excel/CSV. We search for each company website, skip directories, and scrape emails from that site. Duplicate companies are skipped. Street addresses are not saved.
           </p>
         </div>
         <Button asChild variant="outline" disabled={!batchId && !payload?.total}>
@@ -463,7 +463,7 @@ export function Dashboard() {
         <CardHeader>
           <CardTitle>CSV upload</CardTitle>
           <CardDescription>
-            Drag and drop a CSV or Excel file (including Companies House format). Duplicate companies are treated as one. Websites are only kept if the domain matches the company name (directory sites such as Tracxn, Endole, and Company Check are ignored).
+            Drag and drop a CSV or Excel file (including Companies House format). Duplicate companies are treated as one. Social networks and company-directory sites are skipped.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

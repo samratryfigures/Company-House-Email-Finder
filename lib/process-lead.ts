@@ -49,7 +49,7 @@ export async function processLeadById(leadId: string) {
   return { skipped: false as const, status: enriched.status };
 }
 
-async function requeueDirectoryMatches() {
+async function requeueBadResults() {
   const suspect = await prisma.companyLead.findMany({
     where: {
       status: { in: ["COMPLETED", "FAILED"] },
@@ -59,17 +59,31 @@ async function requeueDirectoryMatches() {
     take: 500,
   });
 
-  const ids = suspect
+  const blockedIds = suspect
     .filter((lead) => {
       try {
-        const host = new URL(lead.website!).hostname;
-        return isBlockedHost(host);
+        return isBlockedHost(new URL(lead.website!).hostname);
       } catch {
         return false;
       }
     })
     .map((lead) => lead.id);
 
+  const staleFailed = await prisma.companyLead.findMany({
+    where: {
+      status: "FAILED",
+      OR: [
+        { errorLog: { contains: "did not match" } },
+        { errorLog: { contains: "company-owned website" } },
+        { errorLog: { contains: "official UK website" } },
+        { errorLog: { contains: "directories like" } },
+      ],
+    },
+    select: { id: true },
+    take: 500,
+  });
+
+  const ids = [...new Set([...blockedIds, ...staleFailed.map((lead) => lead.id)])];
   if (ids.length === 0) return 0;
 
   await prisma.companyLead.updateMany({
@@ -94,7 +108,7 @@ export async function processPendingLeads(limit = 3) {
     data: { status: "PENDING" },
   });
 
-  await requeueDirectoryMatches();
+  await requeueBadResults();
 
   const pending = await prisma.companyLead.findMany({
     where: { status: "PENDING" },
