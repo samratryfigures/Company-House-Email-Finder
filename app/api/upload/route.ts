@@ -190,10 +190,14 @@ export async function POST(request: NextRequest) {
     const leadIds = [...created.map((lead) => lead.id), ...toRequeue];
 
     if (leadIds.length > 0) {
-      await inngest.send({
-        name: "app/csv.uploaded",
-        data: { batchId, leadIds },
-      });
+      try {
+        await inngest.send({
+          name: "app/csv.uploaded",
+          data: { batchId, leadIds },
+        });
+      } catch (error) {
+        console.error("Inngest queue unavailable, browser processor will pick these up", error);
+      }
     }
 
     return NextResponse.json({

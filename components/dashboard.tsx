@@ -91,6 +91,7 @@ export function Dashboard() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const processLock = useRef(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(BATCH_STORAGE_KEY);
@@ -116,6 +117,7 @@ export function Dashboard() {
     if (!response.ok) throw new Error("Failed to load leads");
     const json = (await response.json()) as LeadsResponse;
     setPayload(json);
+    return json;
   }, []);
 
   useEffect(() => {
@@ -123,7 +125,13 @@ export function Dashboard() {
 
     const poll = async () => {
       try {
-        if (!cancelled) await fetchLeads(batchId, page);
+        if (cancelled) return;
+        const json = await fetchLeads(batchId, page);
+        if (cancelled || !json || json.stats.processing <= 0 || processLock.current) return;
+        processLock.current = true;
+        void fetch("/api/process", { method: "POST" }).finally(() => {
+          processLock.current = false;
+        });
       } catch {
         // Keep the last successful snapshot if the database is briefly unreachable.
       }
