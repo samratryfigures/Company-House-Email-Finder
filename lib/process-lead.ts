@@ -1,6 +1,7 @@
 import { enrichCompany } from "@/lib/enrichment";
 import { prisma } from "@/lib/prisma";
 import { getSerperApiKey } from "@/lib/settings";
+import { isBlockedHost } from "@/lib/uk-verify";
 
 const STALE_MS = 3 * 60 * 1000;
 
@@ -48,7 +49,43 @@ export async function processLeadById(leadId: string) {
   return { skipped: false as const, status: enriched.status };
 }
 
-export async function processPendingLeads(limit = 2) {
+async function requeueDirectoryMatches() {
+  const suspect = await prisma.companyLead.findMany({
+    where: {
+      status: { in: ["COMPLETED", "FAILED"] },
+      website: { not: null },
+    },
+    select: { id: true, website: true },
+    take: 500,
+  });
+
+  const ids = suspect
+    .filter((lead) => {
+      try {
+        const host = new URL(lead.website!).hostname;
+        return isBlockedHost(host);
+      } catch {
+        return false;
+      }
+    })
+    .map((lead) => lead.id);
+
+  if (ids.length === 0) return 0;
+
+  await prisma.companyLead.updateMany({
+    where: { id: { in: ids } },
+    data: {
+      status: "PENDING",
+      website: null,
+      email: null,
+      verified: false,
+      errorLog: null,
+    },
+  });
+  return ids.length;
+}
+
+export async function processPendingLeads(limit = 3) {
   await prisma.companyLead.updateMany({
     where: {
       status: "PROCESSING",
@@ -57,6 +94,8 @@ export async function processPendingLeads(limit = 2) {
     data: { status: "PENDING" },
   });
 
+  await requeueDirectoryMatches();
+
   const pending = await prisma.companyLead.findMany({
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },
@@ -64,9 +103,6 @@ export async function processPendingLeads(limit = 2) {
     select: { id: true },
   });
 
-  const results = [];
-  for (const lead of pending) {
-    results.push(await processLeadById(lead.id));
-  }
+  const results = await Promise.all(pending.map((lead) => processLeadById(lead.id)));
   return { processed: results.length, results };
 }

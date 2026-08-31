@@ -1,12 +1,13 @@
 import { load } from "cheerio";
 import { SERPER_CREDITS_ERROR, SERPER_KEY_MISSING } from "@/lib/lead-utils";
 import {
-  companyNumberAppearsInText,
+  domainMatchesCompanyName,
   emailBelongsToWebsite,
+  isBlockedHost,
+  looksLikeDirectoryPage,
   nameAppearsInText,
-  postcodeAppearsInText,
+  preferredCompanyTld,
   serperQueryForUkCompany,
-  verifyUkCompanyMatch,
   type UkCompanyContext,
 } from "@/lib/uk-verify";
 
@@ -19,39 +20,6 @@ const DUMMY_EMAIL_RE =
   /(example@|sentry@|test@|dummy@|email@email|user@domain|your@|name@|noreply@|no-reply@|privacy@|webmaster@|wixpress|cloudflare|akamai|schema\.org|sentry\.io|w3\.org)/i;
 
 const IMAGE_OR_ASSET_RE = /\.(png|jpe?g|gif|svg|webp|css|js)$/i;
-
-const BLOCKED_HOSTS = [
-  "facebook.com",
-  "instagram.com",
-  "linkedin.com",
-  "twitter.com",
-  "x.com",
-  "youtube.com",
-  "wikipedia.org",
-  "crunchbase.com",
-  "bloomberg.com",
-  "yellowpages.com",
-  "yelp.com",
-  "reddit.com",
-  "tiktok.com",
-  "pinterest.com",
-  "maps.google.com",
-  "companieshouse.gov.uk",
-  "company-information.service.gov.uk",
-  "find-and-update.company-information.service.gov.uk",
-  "business.data.gov.uk",
-  "endole.co.uk",
-  "companycheck.co.uk",
-  "datalog.co.uk",
-  "opencorporates.com",
-  "duedil.com",
-  "creditsafe.com",
-  "dnb.com",
-  "zoominfo.com",
-  "yell.com",
-  "thomsonlocal.com",
-  "checkcompany.co.uk",
-];
 
 function toTitleCase(value: string): string {
   return value
@@ -90,10 +58,6 @@ function hostnameFromUrl(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-function isBlockedHost(hostname: string): boolean {
-  return BLOCKED_HOSTS.some((blocked) => hostname === blocked || hostname.endsWith(`.${blocked}`));
 }
 
 type SearchHit = {
@@ -159,7 +123,21 @@ export async function findCompanyWebsiteCandidates(
       website: `https://${hostname}`,
     });
   }
+
+  hits.sort((a, b) => scoreHit(b, ctx) - scoreHit(a, ctx));
   return hits;
+}
+
+function scoreHit(hit: SearchHit, ctx: UkCompanyContext): number {
+  const hostname = hostnameFromUrl(hit.website) ?? "";
+  let score = 0;
+  if (domainMatchesCompanyName(hostname, ctx.originalName) || domainMatchesCompanyName(hostname, ctx.cleanedName)) {
+    score += 50;
+  }
+  if (preferredCompanyTld(hostname)) score += 8;
+  if (nameAppearsInText(ctx.originalName, hit.title)) score += 10;
+  if (looksLikeDirectoryPage(`${hit.title} ${hit.snippet}`)) score -= 40;
+  return score;
 }
 
 export async function findCompanyDomain(cleanedName: string, apiKey: string): Promise<string | null> {
@@ -188,7 +166,7 @@ function collectEmails(html: string): string[] {
 async function fetchHtml(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(4_000),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; LeadEnrichmentBot/1.0; +https://localhost) AppleWebKit/537.36",
@@ -211,7 +189,7 @@ async function fetchHtml(url: string): Promise<string | null> {
 
 export async function scrapeForEmail(domain: string): Promise<string | null> {
   const origin = domain.startsWith("http") ? domain.replace(/\/$/, "") : `https://${domain}`;
-  const paths = ["/", "/contact", "/contact-us", "/about", "/about-us"];
+  const paths = ["/", "/contact", "/contact-us"];
   const found: string[] = [];
 
   for (const path of paths) {
@@ -236,21 +214,21 @@ export async function scrapeForEmail(domain: string): Promise<string | null> {
 
 async function verifyCandidate(hit: SearchHit, ctx: UkCompanyContext): Promise<boolean> {
   const hostname = hostnameFromUrl(hit.website);
-  if (!hostname) return false;
+  if (!hostname || isBlockedHost(hostname)) return false;
+  if (looksLikeDirectoryPage(`${hit.title} ${hit.snippet}`)) return false;
 
-  const titleMatch = nameAppearsInText(ctx.originalName, `${hit.title} ${hit.snippet}`);
+  const nameInDomain =
+    domainMatchesCompanyName(hostname, ctx.originalName) || domainMatchesCompanyName(hostname, ctx.cleanedName);
+  if (nameInDomain && preferredCompanyTld(hostname)) {
+    return true;
+  }
+
   const html = (await fetchHtml(hit.website)) ?? "";
-  const pageText = `${hit.title}\n${hit.snippet}\n${html}`;
-  if (verifyUkCompanyMatch(pageText, hostname, ctx)) return true;
+  if (!html) return nameInDomain && preferredCompanyTld(hostname);
+  if (!preferredCompanyTld(hostname)) return false;
 
-  const preview = `${hit.title}\n${hit.snippet}`;
-  return (
-    titleMatch &&
-    (companyNumberAppearsInText(ctx.companyNumber, preview) ||
-      postcodeAppearsInText(ctx.postcode, preview) ||
-      companyNumberAppearsInText(ctx.companyNumber, html) ||
-      postcodeAppearsInText(ctx.postcode, html))
-  );
+  const titleAndHome = `${hit.title}\n${html.slice(0, 20_000)}`;
+  return nameAppearsInText(ctx.originalName, titleAndHome) || nameAppearsInText(ctx.cleanedName, titleAndHome);
 }
 
 export async function enrichCompany(
@@ -287,7 +265,8 @@ export async function enrichCompany(
     }
 
     let verifiedSite: string | null = null;
-    for (const hit of candidates.slice(0, 5)) {
+    for (const hit of candidates.slice(0, 4)) {
+      if (scoreHit(hit, ctx) < 0) continue;
       try {
         if (await verifyCandidate(hit, ctx)) {
           verifiedSite = hit.website;
@@ -303,7 +282,7 @@ export async function enrichCompany(
         cleanedName,
         website: null,
         email: null,
-        errorLog: "Search hits did not match this company's name, company number, or UK postcode",
+        errorLog: "No company-owned website matched this name (directories like Tracxn/Endole are ignored)",
         status: "FAILED",
         verified: false,
       };

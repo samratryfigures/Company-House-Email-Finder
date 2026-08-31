@@ -14,7 +14,92 @@ const NAME_STOPWORDS = new Set([
   "inc",
   "co",
   "company",
+  "group",
+  "holdings",
+  "services",
+  "solutions",
+  "consulting",
+  "international",
 ]);
+
+export const BLOCKED_HOSTS = [
+  "facebook.com",
+  "instagram.com",
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "youtube.com",
+  "wikipedia.org",
+  "crunchbase.com",
+  "bloomberg.com",
+  "yellowpages.com",
+  "yelp.com",
+  "reddit.com",
+  "tiktok.com",
+  "pinterest.com",
+  "maps.google.com",
+  "companieshouse.gov.uk",
+  "company-information.service.gov.uk",
+  "find-and-update.company-information.service.gov.uk",
+  "business.data.gov.uk",
+  "endole.co.uk",
+  "companycheck.co.uk",
+  "datalog.co.uk",
+  "opencorporates.com",
+  "duedil.com",
+  "creditsafe.com",
+  "dnb.com",
+  "zoominfo.com",
+  "yell.com",
+  "thomsonlocal.com",
+  "checkcompany.co.uk",
+  "tracxn.com",
+  "b2bhint.com",
+  "okredo.co.uk",
+  "okredo.com",
+  "northdata.com",
+  "northdata.de",
+  "dnb.com",
+  "rocketreach.co",
+  "apollo.io",
+  "signalhire.com",
+  "owler.com",
+  "pitchbook.com",
+  "cbinsights.com",
+  "craft.co",
+  "zoominfo.com",
+  "kompass.com",
+  "europages.co.uk",
+  "europages.com",
+  "scoot.co.uk",
+  "192.com",
+  "thegazette.co.uk",
+  "duedil.com",
+  "fame.bvdinfo.com",
+  "companynewshq.com",
+  "companiesintheuk.co.uk",
+  "ukdata.com",
+  "bizdb.co.uk",
+  "freecompanydata.com",
+  "company-information.service.gov.uk",
+  "polylogarithm.com",
+  "companynet.polylogarithm.com",
+  "jars.lt",
+  "kompany.com",
+  "creditsafe.co.uk",
+  "graydon.co.uk",
+  "due.dil",
+];
+
+const DIRECTORY_SNIPPET_MARKERS = [
+  "credit report",
+  "credit score",
+  "similar companies",
+  "company profile on",
+  "business directory",
+  "view this company",
+  "find company information",
+];
 
 export type UkCompanyContext = {
   originalName: string;
@@ -35,6 +120,25 @@ export function compactPostcode(postcode: string | null | undefined): string | n
   return extracted ? extracted.replace(/\s+/g, "") : null;
 }
 
+export function isBlockedHost(hostname: string): boolean {
+  const host = hostname.replace(/^www\./i, "").toLowerCase();
+  return BLOCKED_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+}
+
+export function looksLikeDirectoryPage(text: string): boolean {
+  const haystack = text.toLowerCase();
+  return DIRECTORY_SNIPPET_MARKERS.filter((marker) => haystack.includes(marker)).length >= 1;
+}
+
+export function domainMatchesCompanyName(hostname: string, name: string): boolean {
+  const compactHost = hostname.replace(/^www\./i, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const tokens = significantNameTokens(name).sort((a, b) => b.length - a.length);
+  const strong = tokens.filter((token) => token.length >= 4);
+  if (strong.some((token) => compactHost.includes(token))) return true;
+  if (tokens.length >= 2 && tokens.filter((token) => compactHost.includes(token)).length >= 2) return true;
+  return false;
+}
+
 export function nameAppearsInText(name: string, text: string): boolean {
   const haystack = text.toLowerCase();
   const tokens = significantNameTokens(name);
@@ -44,48 +148,20 @@ export function nameAppearsInText(name: string, text: string): boolean {
   }
   const hits = tokens.filter((token) => haystack.includes(token));
   if (tokens.length === 1) return hits.length === 1;
-  return hits.length >= Math.ceil(tokens.length * 0.7);
+  return hits.length >= Math.ceil(tokens.length * 0.8);
 }
 
-export function companyNumberAppearsInText(companyNumber: string | null, text: string): boolean {
-  if (!companyNumber) return false;
-  const haystack = text.toUpperCase().replace(/[\s-]/g, "");
-  const compact = companyNumber.toUpperCase().replace(/[\s-]/g, "");
-  if (haystack.includes(compact)) return true;
-  const unpadded = compact.replace(/^0+/, "");
-  return unpadded.length >= 6 && haystack.includes(unpadded);
-}
-
-export function postcodeAppearsInText(postcode: string | null, text: string): boolean {
-  const compact = compactPostcode(postcode);
-  if (!compact) return false;
-  const haystack = text.toUpperCase().replace(/\s+/g, "");
-  return haystack.includes(compact);
-}
-
-export function isUkPage(text: string, hostname: string): boolean {
-  const haystack = text.toLowerCase();
+export function preferredCompanyTld(hostname: string): boolean {
+  const host = hostname.toLowerCase();
   return (
-    hostname.endsWith(".uk") ||
-    hostname.endsWith(".co.uk") ||
-    haystack.includes("united kingdom") ||
-    haystack.includes("england") ||
-    haystack.includes("scotland") ||
-    haystack.includes("wales") ||
-    haystack.includes("northern ireland") ||
-    /\b(ltd|limited|plc)\b/i.test(text)
+    host.endsWith(".co.uk") ||
+    host.endsWith(".org.uk") ||
+    host.endsWith(".uk") ||
+    host.endsWith(".com") ||
+    host.endsWith(".net") ||
+    host.endsWith(".org") ||
+    host.endsWith(".io")
   );
-}
-
-export function verifyUkCompanyMatch(pageText: string, hostname: string, ctx: UkCompanyContext): boolean {
-  const hasName = nameAppearsInText(ctx.originalName, pageText) || nameAppearsInText(ctx.cleanedName, pageText);
-  if (!hasName) return false;
-
-  const hasNumber = companyNumberAppearsInText(ctx.companyNumber, pageText);
-  const hasPostcode = postcodeAppearsInText(ctx.postcode, pageText);
-  if (hasNumber || hasPostcode) return true;
-
-  return isUkPage(pageText, hostname) && nameAppearsInText(ctx.originalName, `${pageText} ${hostname}`);
 }
 
 export function emailBelongsToWebsite(email: string, website: string): boolean {
@@ -95,7 +171,12 @@ export function emailBelongsToWebsite(email: string, website: string): boolean {
       .toLowerCase();
     const domain = email.split("@")[1]?.toLowerCase();
     if (!host || !domain) return false;
-    if (["gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "aol.com", "live.com", "msn.com"].includes(domain)) {
+    if (isBlockedHost(domain)) return false;
+    if (
+      ["gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com", "aol.com", "live.com", "msn.com"].includes(
+        domain,
+      )
+    ) {
       return false;
     }
     return domain === host || host.endsWith(`.${domain}`) || domain.endsWith(`.${host}`);
@@ -107,10 +188,14 @@ export function emailBelongsToWebsite(email: string, website: string): boolean {
 export function serperQueryForUkCompany(ctx: UkCompanyContext): string {
   return [
     `"${ctx.originalName}"`,
-    ctx.companyNumber,
-    ctx.postcode,
-    "UK official website",
-  ]
-    .filter(Boolean)
-    .join(" ");
+    "official website",
+    "-site:linkedin.com",
+    "-site:facebook.com",
+    "-site:endole.co.uk",
+    "-site:companycheck.co.uk",
+    "-site:tracxn.com",
+    "-site:crunchbase.com",
+    "-site:b2bhint.com",
+    "-site:okredo.co.uk",
+  ].join(" ");
 }

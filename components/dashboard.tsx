@@ -91,7 +91,8 @@ export function Dashboard() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const processLock = useRef(false);
+  const processInflight = useRef(0);
+  const MAX_PROCESS_INFLIGHT = 3;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(BATCH_STORAGE_KEY);
@@ -127,10 +128,12 @@ export function Dashboard() {
       try {
         if (cancelled) return;
         const json = await fetchLeads(batchId, page);
-        if (cancelled || !json || json.stats.processing <= 0 || processLock.current) return;
-        processLock.current = true;
+        if (cancelled || !json || json.stats.processing <= 0 || processInflight.current >= MAX_PROCESS_INFLIGHT) {
+          return;
+        }
+        processInflight.current += 1;
         void fetch("/api/process", { method: "POST" }).finally(() => {
-          processLock.current = false;
+          processInflight.current = Math.max(0, processInflight.current - 1);
         });
       } catch {
         // Keep the last successful snapshot if the database is briefly unreachable.
@@ -388,7 +391,7 @@ export function Dashboard() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Lead Enrichment</h1>
           <p className="mt-2 text-muted-foreground">
-            Upload a Companies House Excel/CSV. We detect CompanyName, use CompanyNumber and postcode to verify the UK website and email, and skip duplicate companies. Street addresses are not saved.
+            Upload a Companies House Excel/CSV. We find each company&apos;s own website (not directories like Tracxn) and emails on that domain. Duplicate companies are skipped. Street addresses are not saved.
           </p>
         </div>
         <Button asChild variant="outline" disabled={!batchId && !payload?.total}>
@@ -460,7 +463,7 @@ export function Dashboard() {
         <CardHeader>
           <CardTitle>CSV upload</CardTitle>
           <CardDescription>
-            Drag and drop a CSV or Excel file (including Companies House format). Duplicate companies are treated as one. Websites are only kept if they match the company name plus number or UK postcode.
+            Drag and drop a CSV or Excel file (including Companies House format). Duplicate companies are treated as one. Websites are only kept if the domain matches the company name (directory sites such as Tracxn, Endole, and Company Check are ignored).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
