@@ -1,11 +1,10 @@
 import { enrichCompany } from "@/lib/enrichment";
 import { prisma } from "@/lib/prisma";
 import { getSerperApiKey } from "@/lib/settings";
-import { isBlockedHost } from "@/lib/uk-verify";
 
-const STALE_MS = 3 * 60 * 1000;
+const STALE_MS = 20 * 1000;
 
-export async function processLeadById(leadId: string) {
+export async function processLeadById(leadId: string, apiKey?: string) {
   const lead = await prisma.companyLead.findUnique({ where: { id: leadId } });
   if (!lead) return { skipped: true as const, reason: "Lead not found" };
 
@@ -17,8 +16,8 @@ export async function processLeadById(leadId: string) {
     return { skipped: true as const, reason: "Already claimed" };
   }
 
-  const apiKey = await getSerperApiKey();
-  if (!apiKey) {
+  const key = apiKey || (await getSerperApiKey());
+  if (!key) {
     await prisma.companyLead.update({
       where: { id: leadId },
       data: {
@@ -29,7 +28,7 @@ export async function processLeadById(leadId: string) {
     return { skipped: false as const, status: "FAILED" as const };
   }
 
-  const enriched = await enrichCompany(lead.originalName, apiKey, {
+  const enriched = await enrichCompany(lead.originalName, key, {
     companyNumber: lead.companyNumber,
     postcode: lead.postcode,
   });
@@ -49,57 +48,7 @@ export async function processLeadById(leadId: string) {
   return { skipped: false as const, status: enriched.status };
 }
 
-async function requeueBadResults() {
-  const suspect = await prisma.companyLead.findMany({
-    where: {
-      status: { in: ["COMPLETED", "FAILED"] },
-      website: { not: null },
-    },
-    select: { id: true, website: true },
-    take: 500,
-  });
-
-  const blockedIds = suspect
-    .filter((lead) => {
-      try {
-        return isBlockedHost(new URL(lead.website!).hostname);
-      } catch {
-        return false;
-      }
-    })
-    .map((lead) => lead.id);
-
-  const staleFailed = await prisma.companyLead.findMany({
-    where: {
-      status: "FAILED",
-      OR: [
-        { errorLog: { contains: "did not match" } },
-        { errorLog: { contains: "company-owned website" } },
-        { errorLog: { contains: "official UK website" } },
-        { errorLog: { contains: "directories like" } },
-      ],
-    },
-    select: { id: true },
-    take: 500,
-  });
-
-  const ids = [...new Set([...blockedIds, ...staleFailed.map((lead) => lead.id)])];
-  if (ids.length === 0) return 0;
-
-  await prisma.companyLead.updateMany({
-    where: { id: { in: ids } },
-    data: {
-      status: "PENDING",
-      website: null,
-      email: null,
-      verified: false,
-      errorLog: null,
-    },
-  });
-  return ids.length;
-}
-
-export async function processPendingLeads(limit = 3) {
+export async function processPendingLeads(limit = 8) {
   await prisma.companyLead.updateMany({
     where: {
       status: "PROCESSING",
@@ -108,8 +57,6 @@ export async function processPendingLeads(limit = 3) {
     data: { status: "PENDING" },
   });
 
-  await requeueBadResults();
-
   const pending = await prisma.companyLead.findMany({
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },
@@ -117,6 +64,11 @@ export async function processPendingLeads(limit = 3) {
     select: { id: true },
   });
 
-  const results = await Promise.all(pending.map((lead) => processLeadById(lead.id)));
+  if (pending.length === 0) {
+    return { processed: 0, results: [] as Awaited<ReturnType<typeof processLeadById>>[] };
+  }
+
+  const apiKey = await getSerperApiKey();
+  const results = await Promise.all(pending.map((lead) => processLeadById(lead.id, apiKey)));
   return { processed: results.length, results };
 }

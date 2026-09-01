@@ -92,7 +92,8 @@ export function Dashboard() {
   const [savingKey, setSavingKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processInflight = useRef(0);
-  const MAX_PROCESS_INFLIGHT = 3;
+  const payloadRef = useRef<LeadsResponse | null>(null);
+  const MAX_PROCESS_INFLIGHT = 6;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(BATCH_STORAGE_KEY);
@@ -117,6 +118,7 @@ export function Dashboard() {
     const response = await fetch(`/api/leads?${params.toString()}`);
     if (!response.ok) throw new Error("Failed to load leads");
     const json = (await response.json()) as LeadsResponse;
+    payloadRef.current = json;
     setPayload(json);
     return json;
   }, []);
@@ -124,30 +126,35 @@ export function Dashboard() {
   useEffect(() => {
     let cancelled = false;
 
-    const poll = async () => {
+    const refresh = async () => {
       try {
         if (cancelled) return;
-        const json = await fetchLeads(batchId, page);
-        if (cancelled || !json || json.stats.processing <= 0 || processInflight.current >= MAX_PROCESS_INFLIGHT) {
-          return;
-        }
-        processInflight.current += 1;
-        void fetch("/api/process", { method: "POST" }).finally(() => {
-          processInflight.current = Math.max(0, processInflight.current - 1);
-        });
+        await fetchLeads(batchId, page);
       } catch {
         // Keep the last successful snapshot if the database is briefly unreachable.
       }
     };
 
-    void poll();
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 3_000);
+    const kickProcess = () => {
+      const remaining = payloadRef.current?.stats.processing ?? 0;
+      if (cancelled || remaining <= 0 || processInflight.current >= MAX_PROCESS_INFLIGHT) return;
+      processInflight.current += 1;
+      void fetch("/api/process", { method: "POST" }).finally(() => {
+        processInflight.current = Math.max(0, processInflight.current - 1);
+      });
+    };
+
+    void refresh();
+    kickProcess();
+    const refreshTimer = window.setInterval(() => {
+      void refresh();
+    }, 2_000);
+    const processTimer = window.setInterval(kickProcess, 800);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearInterval(refreshTimer);
+      window.clearInterval(processTimer);
     };
   }, [batchId, page, fetchLeads]);
 

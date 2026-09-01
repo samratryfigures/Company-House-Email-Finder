@@ -1,4 +1,3 @@
-import { load } from "cheerio";
 import { SERPER_CREDITS_ERROR, SERPER_KEY_MISSING } from "@/lib/lead-utils";
 import {
   emailBelongsToWebsite,
@@ -89,12 +88,12 @@ export async function findCompanyWebsiteCandidates(
   try {
     response = await fetch("https://google.serper.dev/search", {
       method: "POST",
-      signal: AbortSignal.timeout(8_000),
+        signal: AbortSignal.timeout(4_000),
       headers: {
         "X-API-KEY": apiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ q: query, num: 10, gl: "uk", hl: "en" }),
+      body: JSON.stringify({ q: query, num: 5, gl: "uk", hl: "en" }),
     });
   } catch (error) {
     throw new Error(`Serper request failed: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -164,7 +163,7 @@ function collectEmails(html: string): string[] {
 async function fetchHtml(url: string): Promise<string | null> {
   try {
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(2_000),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; LeadEnrichmentBot/1.0; +https://localhost) AppleWebKit/537.36",
@@ -185,32 +184,15 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
+function emailOnSite(text: string, website: string): string | null {
+  return collectEmails(text).find((email) => emailBelongsToWebsite(email, website)) ?? null;
+}
+
 export async function scrapeForEmail(domain: string): Promise<string | null> {
   const origin = domain.startsWith("http") ? domain.replace(/\/$/, "") : `https://${domain}`;
-  const paths = ["/", "/contact", "/contact-us", "/about", "/about-us"];
-  const found: string[] = [];
-
-  for (const path of paths) {
-    const html = await fetchHtml(`${origin}${path === "/" ? "" : path}`);
-    if (!html) continue;
-
-    const $ = load(html);
-    const mailto = $("a[href^='mailto:']")
-      .map((_, el) => $(el).attr("href") ?? "")
-      .get()
-      .map((href) => href.replace(/^mailto:/i, "").split("?")[0]);
-
-    found.push(...collectEmails(mailto.join(" ")));
-    $("script, style, noscript").remove();
-    found.push(...collectEmails($.root().text()));
-    found.push(...collectEmails(html));
-
-    const unique = [...new Set(found)];
-    const match = unique.find((email) => emailBelongsToWebsite(email, origin));
-    if (match) return match;
-  }
-
-  return null;
+  const html = await fetchHtml(origin);
+  if (!html) return null;
+  return emailOnSite(html.replace(/mailto:/gi, " "), origin);
 }
 
 export async function enrichCompany(
@@ -235,7 +217,8 @@ export async function enrichCompany(
 
   try {
     const candidates = await findCompanyWebsiteCandidates(ctx, apiKey);
-    const website = candidates[0]?.website ?? null;
+    const best = candidates[0];
+    const website = best?.website ?? null;
 
     if (!website) {
       return {
@@ -249,7 +232,8 @@ export async function enrichCompany(
     }
 
     try {
-      const email = await scrapeForEmail(website);
+      const email =
+        emailOnSite(`${best.title} ${best.snippet}`, website) ?? (await scrapeForEmail(website));
       return {
         cleanedName,
         website,
