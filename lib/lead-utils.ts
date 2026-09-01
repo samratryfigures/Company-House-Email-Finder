@@ -1,9 +1,14 @@
 export const SERPER_CREDITS_ERROR = "SERPER_CREDITS";
 export const SERPER_KEY_MISSING = "SERPER_KEY_MISSING";
+export const SERPER_CREDIT_USED = "SERPER_CREDIT_USED";
 
 export function isSerperKeyError(message: string | null | undefined): boolean {
   if (!message) return false;
   return message.includes(SERPER_CREDITS_ERROR) || message.includes(SERPER_KEY_MISSING);
+}
+
+export function alreadyUsedSerperCredit(message: string | null | undefined): boolean {
+  return Boolean(message?.includes(SERPER_CREDIT_USED));
 }
 
 export function companyNameKey(name: string): string {

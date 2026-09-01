@@ -1,4 +1,5 @@
 import { enrichCompany } from "@/lib/enrichment";
+import { alreadyUsedSerperCredit, isSerperKeyError, SERPER_CREDIT_USED } from "@/lib/lead-utils";
 import { prisma } from "@/lib/prisma";
 import { getSerperApiKey, isProcessingPaused } from "@/lib/settings";
 
@@ -9,6 +10,26 @@ export async function processLeadById(leadId: string, apiKey?: string) {
   if (!lead) return { skipped: true as const, reason: "Lead not found" };
   if (lead.status === "COMPLETED") {
     return { skipped: true as const, reason: "Already completed" };
+  }
+  if (lead.website) {
+    await prisma.companyLead.update({
+      where: { id: leadId },
+      data: { status: "COMPLETED" },
+    });
+    return { skipped: true as const, reason: "Website already stored" };
+  }
+  if (lead.status === "FAILED" && !isSerperKeyError(lead.errorLog)) {
+    return { skipped: true as const, reason: "Already searched" };
+  }
+  if (alreadyUsedSerperCredit(lead.errorLog) && !isSerperKeyError(lead.errorLog)) {
+    await prisma.companyLead.update({
+      where: { id: leadId },
+      data: {
+        status: "FAILED",
+        errorLog: `${SERPER_CREDIT_USED}: Search credit already spent for this company; not searched again.`,
+      },
+    });
+    return { skipped: true as const, reason: "Credit already used" };
   }
 
   const claimed = await prisma.companyLead.updateMany({
@@ -39,6 +60,11 @@ export async function processLeadById(leadId: string, apiKey?: string) {
     return { skipped: false as const, status: "FAILED" as const };
   }
 
+  await prisma.companyLead.update({
+    where: { id: leadId },
+    data: { errorLog: SERPER_CREDIT_USED },
+  });
+
   const enriched = await enrichCompany(lead.originalName, key, {
     companyNumber: lead.companyNumber,
     postcode: lead.postcode,
@@ -51,7 +77,9 @@ export async function processLeadById(leadId: string, apiKey?: string) {
       website: enriched.website,
       email: enriched.email,
       status: enriched.status,
-      errorLog: enriched.errorLog,
+      errorLog: enriched.errorLog
+        ? `${SERPER_CREDIT_USED}: ${enriched.errorLog}`
+        : SERPER_CREDIT_USED,
       verified: enriched.verified,
     },
   });
@@ -59,13 +87,27 @@ export async function processLeadById(leadId: string, apiKey?: string) {
   return { skipped: false as const, status: enriched.status };
 }
 
-export async function processPendingLeads(limit = 8) {
+export async function processPendingLeads(limit = 4) {
   if (await isProcessingPaused()) {
     return { processed: 0, paused: true, results: [] as Awaited<ReturnType<typeof processLeadById>>[] };
   }
+
   await prisma.companyLead.updateMany({
     where: {
       status: "PROCESSING",
+      errorLog: SERPER_CREDIT_USED,
+      updatedAt: { lt: new Date(Date.now() - STALE_MS) },
+    },
+    data: {
+      status: "FAILED",
+      errorLog: `${SERPER_CREDIT_USED}: Search credit already spent for this company; not searched again.`,
+    },
+  });
+
+  await prisma.companyLead.updateMany({
+    where: {
+      status: "PROCESSING",
+      errorLog: null,
       updatedAt: { lt: new Date(Date.now() - STALE_MS) },
     },
     data: { status: "PENDING" },
@@ -83,7 +125,10 @@ export async function processPendingLeads(limit = 8) {
   }
 
   const apiKey = await getSerperApiKey();
-  const results = await Promise.all(pending.map((lead) => processLeadById(lead.id, apiKey)));
+  const results = [];
+  for (const lead of pending) {
+    results.push(await processLeadById(lead.id, apiKey));
+  }
   const searched = results.filter((row) => !row.skipped).length;
   return { processed: searched, results };
 }

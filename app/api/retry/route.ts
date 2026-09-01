@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { inngest } from "@/lib/inngest";
 import { isSerperKeyError } from "@/lib/lead-utils";
 import { prisma } from "@/lib/prisma";
-import { getSerperApiKey } from "@/lib/settings";
+import { getSerperApiKey, setProcessingPaused } from "@/lib/settings";
 
 export async function POST(request: NextRequest) {
   const serperKey = await getSerperApiKey();
@@ -18,7 +17,7 @@ export async function POST(request: NextRequest) {
       status: "FAILED",
       ...(batchId ? { batchId } : {}),
     },
-    select: { id: true, errorLog: true, batchId: true },
+    select: { id: true, errorLog: true },
   });
 
   const retryable = failed.filter((lead) => isSerperKeyError(lead.errorLog));
@@ -31,19 +30,7 @@ export async function POST(request: NextRequest) {
     data: { status: "PENDING", errorLog: null },
   });
 
-  const grouped = new Map<string, string[]>();
-  for (const lead of retryable) {
-    const ids = grouped.get(lead.batchId) ?? [];
-    ids.push(lead.id);
-    grouped.set(lead.batchId, ids);
-  }
-
-  for (const [id, leadIds] of grouped) {
-    await inngest.send({
-      name: "app/csv.uploaded",
-      data: { batchId: id, leadIds },
-    });
-  }
+  await setProcessingPaused(false);
 
   return NextResponse.json({ queued: retryable.length });
 }

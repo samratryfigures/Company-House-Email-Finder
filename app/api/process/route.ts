@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST() {
   try {
-    const result = await processPendingLeads(8);
+    const result = await processPendingLeads(4);
     return NextResponse.json(result);
   } catch (error) {
     console.error("Process queue failed", error);

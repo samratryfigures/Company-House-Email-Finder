@@ -96,7 +96,7 @@ export function Dashboard() {
   const processInflight = useRef(0);
   const payloadRef = useRef<LeadsResponse | null>(null);
   const pausedRef = useRef(false);
-  const MAX_PROCESS_INFLIGHT = 2;
+  const MAX_PROCESS_INFLIGHT = 1;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(BATCH_STORAGE_KEY);
@@ -297,8 +297,13 @@ export function Dashboard() {
     } catch {
       toast.error("Companies were queued, but the list could not be refreshed. Keep this tab open.");
     }
-    processInflight.current = 0;
-    void fetch("/api/process", { method: "POST" });
+    processInflight.current = Math.max(processInflight.current, 0);
+    if (processInflight.current === 0) {
+      processInflight.current = 1;
+      void fetch("/api/process", { method: "POST" }).finally(() => {
+        processInflight.current = Math.max(0, processInflight.current - 1);
+      });
+    }
   }
 
   function parseAndUpload(file: File) {
@@ -477,8 +482,7 @@ export function Dashboard() {
             Serper API key
           </CardTitle>
           <CardDescription>
-            Get a key at serper.dev. If credits run out mid-search, paste a new key here and click Save & continue — the
-            same upload keeps going. Already-found companies are not searched again.
+            Get a key at serper.dev. Each company is searched once (1 credit). Uploading the same file again does not search those companies again. If credits run out, paste a new key and click Save & continue.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
