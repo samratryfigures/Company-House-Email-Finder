@@ -23,14 +23,28 @@ export function maskApiKey(key: string): string {
 }
 
 export async function isProcessingPaused(): Promise<boolean> {
-  const row = await prisma.appSetting.findUnique({ where: { id: SETTINGS_ID } });
-  return Boolean(row?.processingPaused);
+  try {
+    const row = await prisma.appSetting.findUnique({ where: { id: SETTINGS_ID } });
+    return Boolean(row?.processingPaused);
+  } catch {
+    return false;
+  }
 }
 
 export async function setProcessingPaused(paused: boolean): Promise<void> {
-  await prisma.appSetting.upsert({
-    where: { id: SETTINGS_ID },
-    update: { processingPaused: paused },
-    create: { id: SETTINGS_ID, serperApiKey: "", processingPaused: paused },
-  });
+  try {
+    const existing = await prisma.appSetting.findUnique({ where: { id: SETTINGS_ID } });
+    if (existing) {
+      await prisma.appSetting.update({
+        where: { id: SETTINGS_ID },
+        data: { processingPaused: paused },
+      });
+      return;
+    }
+    await prisma.appSetting.create({
+      data: { id: SETTINGS_ID, serperApiKey: "", processingPaused: paused },
+    });
+  } catch (error) {
+    console.error("Could not save pause flag", error);
+  }
 }

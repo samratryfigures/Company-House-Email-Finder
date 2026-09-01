@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeCompanyNumber, uniqueCompanyRecords, type CompanyRecord } from "@/lib/csv";
-import { inngest } from "@/lib/inngest";
 import { leadIdentityKey } from "@/lib/lead-utils";
 import { prisma } from "@/lib/prisma";
-import { getSerperApiKey } from "@/lib/settings";
+import { getSerperApiKey, setProcessingPaused } from "@/lib/settings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MAX_BATCH = 1_000;
+const MAX_BATCH = 250;
 
 function optionalText(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -61,6 +60,12 @@ function parseIncomingCompanies(raw: unknown): CompanyRecord[] {
   return uniqueCompanyRecords(records);
 }
 
+async function poolMap<T>(items: T[], size: number, worker: (item: T) => Promise<void>) {
+  for (let i = 0; i < items.length; i += size) {
+    await Promise.all(items.slice(i, i + size).map(worker));
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const serperKey = await getSerperApiKey();
@@ -96,6 +101,13 @@ export async function POST(request: NextRequest) {
     const keys = companies.map((company) => leadIdentityKey(company.originalName, company.companyNumber));
     const existing = await prisma.companyLead.findMany({
       where: { nameKey: { in: keys } },
+      select: {
+        id: true,
+        nameKey: true,
+        status: true,
+        verified: true,
+        website: true,
+      },
     });
     const existingByKey = new Map(existing.map((lead) => [lead.nameKey, lead]));
 
@@ -111,9 +123,10 @@ export async function POST(request: NextRequest) {
       incorporationDate: string | null;
       accountsNextDueDate: string | null;
       accountsLastMadeUpDate: string | null;
+      status: "PENDING";
     }> = [];
-    const toReuseCompleted: string[] = [];
-    const toRequeue: string[] = [];
+    const reuseIds: string[] = [];
+    const requeueRows: Array<{ id: string; company: (typeof companies)[number] }> = [];
 
     for (const company of companies) {
       const nameKey = leadIdentityKey(company.originalName, company.companyNumber);
@@ -132,31 +145,33 @@ export async function POST(request: NextRequest) {
           incorporationDate: company.incorporationDate,
           accountsNextDueDate: company.accountsNextDueDate,
           accountsLastMadeUpDate: company.accountsLastMadeUpDate,
+          status: "PENDING",
         });
         continue;
       }
 
-      if (current.status === "COMPLETED" && current.verified && current.website) {
-        await prisma.companyLead.update({
-          where: { id: current.id },
-          data: {
-            batchId,
-            completeAddress: company.completeAddress,
-            companyCategory: company.companyCategory,
-            companyStatus: company.companyStatus,
-            incorporationDate: company.incorporationDate,
-            accountsNextDueDate: company.accountsNextDueDate,
-            accountsLastMadeUpDate: company.accountsLastMadeUpDate,
-            postcode: company.postcode ?? current.postcode,
-            companyNumber: company.companyNumber ?? current.companyNumber,
-          },
-        });
-        toReuseCompleted.push(current.id);
+      if (current.status === "COMPLETED" && current.website) {
+        reuseIds.push(current.id);
         continue;
       }
 
+      requeueRows.push({ id: current.id, company });
+    }
+
+    if (toInsert.length > 0) {
+      await prisma.companyLead.createMany({ data: toInsert, skipDuplicates: true });
+    }
+
+    if (reuseIds.length > 0) {
+      await prisma.companyLead.updateMany({
+        where: { id: { in: reuseIds } },
+        data: { batchId },
+      });
+    }
+
+    await poolMap(requeueRows, 25, async ({ id, company }) => {
       await prisma.companyLead.update({
-        where: { id: current.id },
+        where: { id },
         data: {
           batchId,
           originalName: company.originalName,
@@ -173,41 +188,19 @@ export async function POST(request: NextRequest) {
           verified: false,
         },
       });
-      toRequeue.push(current.id);
-    }
+    });
 
-    const created =
-      toInsert.length > 0
-        ? await prisma.companyLead.createManyAndReturn({
-            data: toInsert.map((row) => ({
-              ...row,
-              status: "PENDING" as const,
-            })),
-            select: { id: true },
-          })
-        : [];
-
-    const leadIds = [...created.map((lead) => lead.id), ...toRequeue];
-
-    if (leadIds.length > 0) {
-      try {
-        await inngest.send({
-          name: "app/csv.uploaded",
-          data: { batchId, leadIds },
-        });
-      } catch (error) {
-        console.error("Inngest queue unavailable, browser processor will pick these up", error);
-      }
-    }
+    await setProcessingPaused(false);
 
     return NextResponse.json({
       batchId,
-      inserted: created.length,
-      reused: toReuseCompleted.length,
-      queued: leadIds.length,
+      inserted: toInsert.length,
+      reused: reuseIds.length,
+      queued: toInsert.length + requeueRows.length,
     });
   } catch (error) {
     console.error("Upload failed", error);
-    return NextResponse.json({ error: "Failed to queue companies" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to queue companies";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

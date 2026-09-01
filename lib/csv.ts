@@ -60,8 +60,8 @@ const ADDRESS_HEADERS = [
 ];
 
 export const MAX_UPLOAD_ROWS = 30_000;
-export const PARSE_CHUNK_ROWS = 10_000;
-export const API_UPLOAD_CHUNK = 1_000;
+export const PARSE_CHUNK_ROWS = 2_000;
+export const API_UPLOAD_CHUNK = 250;
 
 const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
 

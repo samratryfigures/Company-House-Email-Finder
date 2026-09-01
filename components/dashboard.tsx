@@ -285,14 +285,20 @@ export function Dashboard() {
     if (records.length > unique.length) {
       toast.message(`Deduped to ${unique.length.toLocaleString()} unique companies`);
     }
+    await afterQueue(currentBatchId);
+  }
+
+  async function afterQueue(currentBatchId: string) {
     pausedRef.current = false;
     setPaused(false);
-    await fetch("/api/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paused: false }),
-    });
-    await fetchLeads(currentBatchId, 1);
+    setPage(1);
+    try {
+      await fetchLeads(currentBatchId, 1);
+    } catch {
+      toast.error("Companies were queued, but the list could not be refreshed. Keep this tab open.");
+    }
+    processInflight.current = 0;
+    void fetch("/api/process", { method: "POST" });
   }
 
   function parseAndUpload(file: File) {
@@ -407,8 +413,8 @@ export function Dashboard() {
               if (truncated) {
                 toast.message(`Stopped at ${MAX_UPLOAD_ROWS.toLocaleString()} rows`);
               }
+              await afterQueue(currentBatchId);
             }
-            await fetchLeads(currentBatchId, 1);
           } catch (error) {
             toast.error(error instanceof Error ? error.message : "Upload failed");
           } finally {
