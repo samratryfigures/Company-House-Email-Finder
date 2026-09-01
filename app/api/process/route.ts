@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { NextResponse } from "next/server";
 import { processPendingLeads } from "@/lib/process-lead";
 
@@ -9,11 +8,6 @@ export const dynamic = "force-dynamic";
 export async function POST() {
   try {
     const result = await processPendingLeads(8);
-    if (result.processed > 0) {
-      after(() => {
-        void processPendingLeads(8);
-      });
-    }
     return NextResponse.json(result);
   } catch (error) {
     console.error("Process queue failed", error);
@@ -22,8 +16,4 @@ export async function POST() {
       { status: 500 },
     );
   }
-}
-
-export async function GET() {
-  return POST();
 }

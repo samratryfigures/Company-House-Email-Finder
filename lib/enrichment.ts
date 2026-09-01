@@ -88,7 +88,7 @@ export async function findCompanyWebsiteCandidates(
   try {
     response = await fetch("https://google.serper.dev/search", {
       method: "POST",
-        signal: AbortSignal.timeout(4_000),
+      signal: AbortSignal.timeout(4_000),
       headers: {
         "X-API-KEY": apiKey,
         "Content-Type": "application/json",

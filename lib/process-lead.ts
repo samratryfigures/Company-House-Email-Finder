@@ -2,15 +2,18 @@ import { enrichCompany } from "@/lib/enrichment";
 import { prisma } from "@/lib/prisma";
 import { getSerperApiKey } from "@/lib/settings";
 
-const STALE_MS = 20 * 1000;
+const STALE_MS = 90 * 1000;
 
 export async function processLeadById(leadId: string, apiKey?: string) {
   const lead = await prisma.companyLead.findUnique({ where: { id: leadId } });
   if (!lead) return { skipped: true as const, reason: "Lead not found" };
+  if (lead.status === "COMPLETED") {
+    return { skipped: true as const, reason: "Already completed" };
+  }
 
   const claimed = await prisma.companyLead.updateMany({
-    where: { id: leadId, status: { in: ["PENDING", "PROCESSING"] } },
-    data: { status: "PROCESSING", errorLog: null },
+    where: { id: leadId, status: "PENDING" },
+    data: { status: "PROCESSING" },
   });
   if (claimed.count === 0) {
     return { skipped: true as const, reason: "Already claimed" };
@@ -70,5 +73,6 @@ export async function processPendingLeads(limit = 8) {
 
   const apiKey = await getSerperApiKey();
   const results = await Promise.all(pending.map((lead) => processLeadById(lead.id, apiKey)));
-  return { processed: results.length, results };
+  const searched = results.filter((row) => !row.skipped).length;
+  return { processed: searched, results };
 }

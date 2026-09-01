@@ -93,7 +93,7 @@ export function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processInflight = useRef(0);
   const payloadRef = useRef<LeadsResponse | null>(null);
-  const MAX_PROCESS_INFLIGHT = 6;
+  const MAX_PROCESS_INFLIGHT = 2;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(BATCH_STORAGE_KEY);
@@ -149,7 +149,7 @@ export function Dashboard() {
     const refreshTimer = window.setInterval(() => {
       void refresh();
     }, 2_000);
-    const processTimer = window.setInterval(kickProcess, 800);
+    const processTimer = window.setInterval(kickProcess, 2_000);
 
     return () => {
       cancelled = true;
