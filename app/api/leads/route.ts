@@ -79,3 +79,16 @@ export async function GET(request: NextRequest) {
     },
   });
 }
+
+export async function DELETE() {
+  try {
+    const result = await prisma.companyLead.deleteMany({});
+    return NextResponse.json({ deleted: result.count });
+  } catch (error) {
+    console.error("Clear all failed", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to clear leads" },
+      { status: 500 },
+    );
+  }
+}

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { toast } from "sonner";
-import { Download, KeyRound, LoaderCircle, Play, Square, Upload } from "lucide-react";
+import { Download, KeyRound, LoaderCircle, Play, Square, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -92,6 +92,7 @@ export function Dashboard() {
   const [savingKey, setSavingKey] = useState(false);
   const [paused, setPaused] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processInflight = useRef(0);
   const payloadRef = useRef<LeadsResponse | null>(null);
@@ -225,6 +226,49 @@ export function Dashboard() {
       toast.error(error instanceof Error ? error.message : "Could not update run");
     } finally {
       setRunBusy(false);
+    }
+  }
+
+  async function clearAll() {
+    const confirmed = window.confirm(
+      "Clear all companies, websites, emails, and saved batch memory? Your Serper key will be kept. This cannot be undone.",
+    );
+    if (!confirmed) return;
+
+    setClearing(true);
+    pausedRef.current = true;
+    setPaused(true);
+    try {
+      await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: true }),
+      });
+      const response = await fetch("/api/leads", { method: "DELETE" });
+      const json = (await response.json().catch(() => ({}))) as { error?: string; deleted?: number };
+      if (!response.ok) throw new Error(json.error ?? "Could not clear");
+
+      window.localStorage.removeItem(BATCH_STORAGE_KEY);
+      setBatchId(null);
+      setPage(1);
+      setPayload(null);
+      payloadRef.current = null;
+      processInflight.current = 0;
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      pausedRef.current = false;
+      setPaused(false);
+      await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: false }),
+      });
+      toast.success(`Cleared ${json.deleted?.toLocaleString() ?? "all"} companies`);
+    } catch (error) {
+      pausedRef.current = false;
+      setPaused(false);
+      toast.error(error instanceof Error ? error.message : "Could not clear");
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -466,6 +510,15 @@ export function Dashboard() {
               Stop
             </Button>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={clearing || uploading || (!batchId && !payload?.total && stats.totalUploaded <= 0)}
+            onClick={() => void clearAll()}
+          >
+            <Trash2 />
+            {clearing ? "Clearing…" : "Clear all"}
+          </Button>
           <Button asChild variant="outline" disabled={!batchId && !payload?.total}>
             <a href={batchId ? `/api/leads/export?batchId=${batchId}` : "/api/leads/export"}>
               <Download />
