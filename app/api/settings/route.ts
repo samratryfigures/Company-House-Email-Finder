@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSerperApiKey, maskApiKey, saveSerperApiKey } from "@/lib/settings";
+import { getSerperApiKey, isProcessingPaused, maskApiKey, saveSerperApiKey } from "@/lib/settings";
 
 export async function GET() {
   const key = await getSerperApiKey();
   return NextResponse.json({
     configured: Boolean(key),
     hint: maskApiKey(key),
+    paused: await isProcessingPaused(),
   });
 }
 

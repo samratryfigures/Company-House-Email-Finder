@@ -21,3 +21,16 @@ export function maskApiKey(key: string): string {
   if (trimmed.length <= 4) return "••••";
   return `••••••••${trimmed.slice(-4)}`;
 }
+
+export async function isProcessingPaused(): Promise<boolean> {
+  const row = await prisma.appSetting.findUnique({ where: { id: SETTINGS_ID } });
+  return Boolean(row?.processingPaused);
+}
+
+export async function setProcessingPaused(paused: boolean): Promise<void> {
+  await prisma.appSetting.upsert({
+    where: { id: SETTINGS_ID },
+    update: { processingPaused: paused },
+    create: { id: SETTINGS_ID, serperApiKey: "", processingPaused: paused },
+  });
+}

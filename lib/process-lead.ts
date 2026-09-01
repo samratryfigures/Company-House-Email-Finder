@@ -1,6 +1,6 @@
 import { enrichCompany } from "@/lib/enrichment";
 import { prisma } from "@/lib/prisma";
-import { getSerperApiKey } from "@/lib/settings";
+import { getSerperApiKey, isProcessingPaused } from "@/lib/settings";
 
 const STALE_MS = 90 * 1000;
 
@@ -17,6 +17,14 @@ export async function processLeadById(leadId: string, apiKey?: string) {
   });
   if (claimed.count === 0) {
     return { skipped: true as const, reason: "Already claimed" };
+  }
+
+  if (await isProcessingPaused()) {
+    await prisma.companyLead.update({
+      where: { id: leadId },
+      data: { status: "PENDING" },
+    });
+    return { skipped: true as const, reason: "Paused" };
   }
 
   const key = apiKey || (await getSerperApiKey());
@@ -52,6 +60,9 @@ export async function processLeadById(leadId: string, apiKey?: string) {
 }
 
 export async function processPendingLeads(limit = 8) {
+  if (await isProcessingPaused()) {
+    return { processed: 0, paused: true, results: [] as Awaited<ReturnType<typeof processLeadById>>[] };
+  }
   await prisma.companyLead.updateMany({
     where: {
       status: "PROCESSING",

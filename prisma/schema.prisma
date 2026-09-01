@@ -43,7 +43,8 @@ model CompanyLead {
 }
 
 model AppSetting {
-  id           String   @id
-  serperApiKey String   @default("")
-  updatedAt    DateTime @updatedAt
+  id                String   @id
+  serperApiKey      String   @default("")
+  processingPaused  Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { toast } from "sonner";
-import { Download, KeyRound, LoaderCircle, Upload } from "lucide-react";
+import { Download, KeyRound, LoaderCircle, Play, Square, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -90,9 +90,12 @@ export function Dashboard() {
   const [keyHint, setKeyHint] = useState("");
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processInflight = useRef(0);
   const payloadRef = useRef<LeadsResponse | null>(null);
+  const pausedRef = useRef(false);
   const MAX_PROCESS_INFLIGHT = 2;
 
   useEffect(() => {
@@ -102,9 +105,11 @@ export function Dashboard() {
     void (async () => {
       const response = await fetch("/api/settings");
       if (!response.ok) return;
-      const json = (await response.json()) as { configured: boolean; hint: string };
+      const json = (await response.json()) as { configured: boolean; hint: string; paused?: boolean };
       setKeyConfigured(json.configured);
       setKeyHint(json.hint);
+      pausedRef.current = Boolean(json.paused);
+      setPaused(Boolean(json.paused));
     })();
   }, []);
 
@@ -137,7 +142,9 @@ export function Dashboard() {
 
     const kickProcess = () => {
       const remaining = payloadRef.current?.stats.processing ?? 0;
-      if (cancelled || remaining <= 0 || processInflight.current >= MAX_PROCESS_INFLIGHT) return;
+      if (cancelled || pausedRef.current || remaining <= 0 || processInflight.current >= MAX_PROCESS_INFLIGHT) {
+        return;
+      }
       processInflight.current += 1;
       void fetch("/api/process", { method: "POST" }).finally(() => {
         processInflight.current = Math.max(0, processInflight.current - 1);
@@ -199,6 +206,28 @@ export function Dashboard() {
     }
   }
 
+  async function setRunPaused(nextPaused: boolean) {
+    setRunBusy(true);
+    pausedRef.current = nextPaused;
+    setPaused(nextPaused);
+    try {
+      const response = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: nextPaused }),
+      });
+      if (!response.ok) throw new Error("Could not update run");
+      toast.success(nextPaused ? "Enrichment stopped" : "Enrichment resumed");
+      await fetchLeads(batchId, page);
+    } catch (error) {
+      pausedRef.current = !nextPaused;
+      setPaused(!nextPaused);
+      toast.error(error instanceof Error ? error.message : "Could not update run");
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
   async function saveSerperKey(continueSearch: boolean) {
     const key = apiKeyInput.trim();
     if (!key) {
@@ -222,6 +251,7 @@ export function Dashboard() {
       toast.success("Serper key saved");
 
       if (continueSearch) {
+        await setRunPaused(false);
         const retryResponse = await fetch("/api/retry", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -255,6 +285,13 @@ export function Dashboard() {
     if (records.length > unique.length) {
       toast.message(`Deduped to ${unique.length.toLocaleString()} unique companies`);
     }
+    pausedRef.current = false;
+    setPaused(false);
+    await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused: false }),
+    });
     await fetchLeads(currentBatchId, 1);
   }
 
@@ -401,12 +438,30 @@ export function Dashboard() {
             Upload a Companies House Excel/CSV. We search for each company website, skip directories, and scrape emails from that site. Duplicate companies are skipped. Street addresses are not saved.
           </p>
         </div>
-        <Button asChild variant="outline" disabled={!batchId && !payload?.total}>
-          <a href={batchId ? `/api/leads/export?batchId=${batchId}` : "/api/leads/export"}>
-            <Download />
-            Export to CSV
-          </a>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {paused ? (
+            <Button type="button" disabled={runBusy} onClick={() => void setRunPaused(false)}>
+              <Play />
+              Resume
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={runBusy || stats.processing <= 0}
+              onClick={() => void setRunPaused(true)}
+            >
+              <Square />
+              Stop
+            </Button>
+          )}
+          <Button asChild variant="outline" disabled={!batchId && !payload?.total}>
+            <a href={batchId ? `/api/leads/export?batchId=${batchId}` : "/api/leads/export"}>
+              <Download />
+              Export to CSV
+            </a>
+          </Button>
+        </div>
       </header>
 
       <Card>
@@ -514,7 +569,15 @@ export function Dashboard() {
           </button>
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{isProcessing ? "Enrichment in progress" : uploading ? "Queuing records" : "Idle"}</span>
+              <span>
+                {paused
+                  ? "Stopped — remaining companies will wait until you click Resume"
+                  : isProcessing
+                    ? "Enrichment in progress"
+                    : uploading
+                      ? "Queuing records"
+                      : "Idle"}
+              </span>
               <span>{progressValue}%</span>
             </div>
             <Progress value={progressValue} />
